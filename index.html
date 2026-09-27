@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise Search</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800 font-sans pb-10">
+
+    <!-- Header & Config -->
+    <div class="bg-indigo-600 text-white py-6 shadow-md">
+        <div class="max-w-4xl mx-auto px-4 flex justify-between items-center">
+            <h1 class="text-2xl font-bold tracking-tight">Doc Search</h1>
+            <div>
+                <input type="file" id="folderPicker" webkitdirectory directory multiple class="hidden" onchange="handleBrowserUpload(event)">
+                <button onclick="document.getElementById('folderPicker').click()" class="bg-indigo-500 hover:bg-indigo-400 text-white py-2 px-6 rounded-lg font-medium transition shadow-lg flex items-center gap-2">
+                    <span class="text-xl">📁</span> Select Folder
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="max-w-4xl mx-auto px-4 mt-8">
+        
+        <div id="status" class="mb-6 text-center text-sm font-semibold text-indigo-600 h-6"></div>
+        
+        <div class="relative shadow-sm rounded-xl overflow-hidden flex bg-white border border-gray-200">
+            <input type="text" id="searchInput" placeholder="Search keywords..." 
+                   class="w-full py-4 px-6 text-lg outline-none" onkeypress="handleEnterSearch(event)">
+            <button onclick="triggerSearch()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-8 font-bold transition">
+                Search
+            </button>
+        </div>
+
+        <div class="mt-4 flex flex-wrap gap-2 items-center" id="searchHistoryContainer"></div>
+        <div id="results" class="mt-10 space-y-4"></div>
+
+    </div>
+
+    <!-- Success Modal Popup -->
+    <div id="successModal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center z-50 backdrop-blur-sm transition-opacity">
+        <div class="p-8 border w-96 shadow-2xl rounded-2xl bg-white text-center transform transition-all scale-100">
+            <div class="mx-auto flex items-center justify-center h-20 w-20 rounded-full bg-emerald-100 mb-6">
+                <span class="text-4xl">✅</span>
+            </div>
+            <h3 class="text-2xl font-bold text-gray-900 mb-2">Indexing Complete!</h3>
+            <p class="text-gray-500 mb-8" id="modalMessage">You can start the search now.</p>
+            <button onclick="closeModal()" class="px-6 py-3 bg-indigo-600 text-white text-lg font-medium rounded-xl w-full shadow-md hover:bg-indigo-700 focus:outline-none transition">
+                Start Searching
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "http://127.0.0.1:8000";
+        
+        document.addEventListener("DOMContentLoaded", renderSearchHistory);
+
+        // --- Indexing & Modal Logic ---
+        async function handleBrowserUpload(event) {
+            const files = event.target.files;
+            if (files.length === 0) return;
+
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = `<span class="animate-pulse">Uploading and indexing ${files.length} files... Please wait.</span>`;
+            
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) {
+                formData.append("files", files[i]);
+                formData.append("paths", files[i].webkitRelativePath);
+            }
+
+            try {
+                console.log("Sending files to backend...");
+                const response = await fetch(`${API_URL}/browser_index`, { method: 'POST', body: formData });
+                const data = await response.json();
+                console.log("Backend response:", data);
+
+                if (response.ok) {
+                    statusDiv.innerHTML = ``; // Clear status
+                    
+                    // Force Popup
+                    const modal = document.getElementById('successModal');
+                    modal.classList.remove('hidden');
+                    modal.style.display = 'flex';
+                } else {
+                    statusDiv.innerHTML = `<span class="text-red-500">❌ Server Error: ${data.detail || JSON.stringify(data)}</span>`;
+                    alert("Backend Error! Check VS Code terminal.");
+                }
+            } catch (error) {
+                console.error("Upload failed:", error);
+                statusDiv.innerHTML = `<span class="text-red-500">❌ Connection lost. Is main.py running?</span>`;
+                alert("Failed to connect to the FastAPI server.");
+            } finally {
+                event.target.value = ''; // Reset input to allow re-selection of the same folder
+            }
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('successModal');
+            modal.classList.add('hidden');
+            modal.style.display = 'none';
+            document.getElementById('searchInput').focus();
+        }
+
+        // --- Search & History ---
+        function triggerSearch() {
+            const query = document.getElementById('searchInput').value.trim();
+            if (!query) return;
+            saveSearchHistory(query);
+            performSearch(query);
+        }
+
+        function handleEnterSearch(event) {
+            if (event.key === 'Enter') triggerSearch();
+        }
+
+        function saveSearchHistory(query) {
+            let history = JSON.parse(localStorage.getItem('searchHistory') || '[]');
+            history = history.filter(item => item.toLowerCase() !== query.toLowerCase());
+            history.unshift(query);
+            if (history.length > 6) history.pop();
+            localStorage.setItem('searchHistory', JSON.stringify(history));
+            renderSearchHistory();
+        }
+
+        function renderSearchHistory() {
+            let history = JSON.parse(localStorage.getItem('searchHistory') || '[]');
+            const container = document.getElementById('searchHistoryContainer');
+            if (history.length === 0) { container.style.display = 'none'; return; }
+            container.style.display = 'flex';
+            container.innerHTML = `<span class="text-xs text-gray-400 font-medium uppercase tracking-wider mr-2">Recent:</span>` +
+                history.map(term => `<button onclick="document.getElementById('searchInput').value='${term}'; performSearch('${term}')" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 rounded-full text-sm transition">${term}</button>`).join('');
+        }
+
+        async function performSearch(query) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<div class="text-center text-gray-400 py-10">Searching...</div>';
+
+            try {
+                const response = await fetch(`${API_URL}/search?q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+
+                if (data.length === 0) {
+                    resultsDiv.innerHTML = '<div class="text-center text-gray-500 py-10 bg-white rounded-xl shadow-sm border border-gray-100">No results found.</div>';
+                    return;
+                }
+
+                resultsDiv.innerHTML = data.map(item => `
+                    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition">
+                        <div class="flex justify-between items-start mb-3">
+                            <div class="flex items-center gap-3">
+                                <span class="bg-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded text-xs font-bold uppercase tracking-wide">${item.file_type}</span>
+                                <strong class="text-gray-900">${item.file_name}</strong>
+                                <span class="text-gray-400 text-sm">&bull;</span>
+                                <span class="text-gray-500 text-sm font-medium">${item.metadata_type}: ${item.metadata_value}</span>
+                            </div>
+                            <button onclick="openFile('${item.file_path.replace(/\\/g, '\\\\')}', '${item.file_type}', '${item.metadata_type}', '${item.metadata_value}')" 
+                                    class="text-indigo-600 hover:text-indigo-800 text-sm font-semibold px-4 py-1.5 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition">
+                                Open Location ↗
+                            </button>
+                        </div>
+                        <div class="text-gray-700 text-base leading-relaxed">${item.highlight}</div>
+                    </div>
+                `).join('');
+                
+            } catch (error) {
+                resultsDiv.innerHTML = `<div class="text-center text-red-500 py-10">Error connecting to server.</div>`;
+            }
+        }
+
+        function openFile(relativePath, fileType, metadataType, metadataValue) {
+            if (fileType.toLowerCase() === 'pdf' && metadataType === 'page') {
+                const pageNum = metadataValue;
+                window.open(`${API_URL}/serve_pdf?path=${encodeURIComponent(relativePath)}#page=${pageNum}`, '_blank');
+            } else {
+                fetch(`${API_URL}/open_file?path=${encodeURIComponent(relativePath)}`);
+            }
+        }
+    </script>
+</body>
+</html>
